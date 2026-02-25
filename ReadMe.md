@@ -1,0 +1,9 @@
+
+0	0b0000_0001	0x01	Left Control
+1	0b0000_0010	0x02	Left Shift
+2	0b0000_0100	0x04	Left Alt
+3	0b0000_1000	0x08	Left GUI
+4	0b0001_0000	0x10	Right Control
+5	0b0010_0000	0x20	Right Shift
+6	0b0100_0000	0x40	Right Alt
+7	0b1000_0000	0x80	Right GUI

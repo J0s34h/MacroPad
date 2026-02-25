@@ -1,0 +1,36 @@
+# Global LED configuration (fallback)
+ledState:
+  type: Solid
+  brightness: 60
+  color: 0x444444
+
+profiles:
+  - name: "Gaming Profile"
+    wheel:
+      type: Twist
+      maxLeftColor: 0xFF0000    # Red
+      neutralColor: 0x00AA00    # Green
+      maxRightColor: 0x0000FF   # Blue
+    scroll:
+      type: KeyEmulation
+      key1: 0x001E  # Keyboard '1' (for weapon switch left)
+      key2: 0x001F  # Keyboard '2' (for weapon switch right)
+    buttons:
+      - name: "Jump"
+        sequence: [0x002C]      # Space
+        type: short
+      - name: "Crouch"
+        sequence: [0x002D]      # Left Ctrl
+        type: toggle
+      - name: "Reload"
+        sequence: [0x000F]      # Keyboard 'R'
+        type: short
+      - name: "Use"
+        sequence: [0x0008]      # Keyboard 'E'
+        type: short
+      - name: "Sprint"
+        sequence: [0x0039]      # Left Shift
+        type: toggle
+      - name: "Menu"
+        sequence: [0x0041]      # Escape
+        type: short
