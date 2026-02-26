@@ -1,0 +1,66 @@
+name: Compile Arduino Sketch (macOS arm64, no libraries)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  compile:
+    runs-on: self-hosted  # your macOS arm64 runner label
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
+          sudo mv bin/arduino-cli /usr/local/bin/
+
+      - name: Install PyYAML
+        run: pip3 install pyyaml
+
+      - name: Parse sketch.yaml and install core
+        id: build
+        run: |
+          python3 <<EOF
+          import yaml
+          import subprocess
+          import os
+
+          with open('sketch.yaml') as f:
+              data = yaml.safe_load(f)
+
+          profile_name = data.get('default_profile', 'release')
+          profile = data['profiles'][profile_name]
+
+          # 1. Add platform index URL
+          platform_info = profile['platforms'][0]
+          url = platform_info['platform_index_url']
+          subprocess.run(['arduino-cli', 'config', 'add', 'board_manager.additional_urls', url], check=True)
+
+          # 2. Update core index
+          subprocess.run(['arduino-cli', 'core', 'update-index'], check=True)
+
+          # 3. Install core with version
+          platform_str = platform_info['platform']
+          if '(' in platform_str:
+              core, version = platform_str.rsplit('(', 1)
+              core = core.strip()
+              version = version.strip(')')
+              core_spec = f"{core}@{version}"
+          else:
+              core_spec = platform_str.strip()
+          subprocess.run(['arduino-cli', 'core', 'install', core_spec], check=True)
+
+          # 4. Save FQBN for compile step
+          fqbn = profile['fqbn']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"fqbn={fqbn}\n")
+          EOF
+
+      - name: Compile sketch
+        run: |
+          arduino-cli compile --fqbn "${{ steps.build.outputs.fqbn }}" .
