@@ -9,7 +9,7 @@ on:
 
 jobs:
   compile:
-    runs-on: self-hosted   # your macOS arm64 runner label
+    runs-on: self-hosted
     env:
       RUNNER_TOOL_CACHE: /Users/gh-runner/hostedtoolcache
 
@@ -27,16 +27,16 @@ jobs:
           mv bin/arduino-cli "$HOME/.local/bin/"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-          cache: 'pip'
+      - name: Install Python 3.11 with Homebrew
+        run: |
+          brew update
+          brew install python@3.11
+          echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
       - name: Install pyyaml
         run: |
-          pip install --upgrade pip
-          pip install pyyaml
+          pip3 install --upgrade pip
+          pip3 install pyyaml
 
       - name: Configure arduino-cli and install core
         id: build
