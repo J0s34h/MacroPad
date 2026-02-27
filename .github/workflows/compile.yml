@@ -33,10 +33,20 @@ jobs:
           brew install python@3.11
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
+      # ----- Create and activate a virtual environment -----
+      - name: Create virtual environment
+        run: python3 -m venv venv
+
+      - name: Activate venv and set as default Python
+        run: |
+          echo "VIRTUAL_ENV=$PWD/venv" >> $GITHUB_ENV
+          echo "$PWD/venv/bin" >> $GITHUB_PATH
+      # -----------------------------------------------------
+
       - name: Install pyyaml
         run: |
-          pip3 install --upgrade pip
-          pip3 install pyyaml
+          pip install --upgrade pip
+          pip install pyyaml
 
       - name: Configure arduino-cli and install core
         id: build
