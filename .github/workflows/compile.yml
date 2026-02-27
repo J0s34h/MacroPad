@@ -10,15 +10,15 @@ on:
 jobs:
   compile:
     runs-on: self-hosted   # your macOS arm64 runner label
+    env:
+      RUNNER_TOOL_CACHE: /Users/gh-runner/hostedtoolcache
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Prepare Python tool cache
-        run: |
-          mkdir -p "$HOME/hostedtoolcache"
-          echo "RUNNER_TOOL_CACHE=$HOME/hostedtoolcache" >> $GITHUB_ENV
+      - name: Create Python tool cache directory
+        run: mkdir -p "$RUNNER_TOOL_CACHE"
 
       - name: Install arduino-cli
         run: |
