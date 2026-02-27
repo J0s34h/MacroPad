@@ -15,6 +15,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Prepare Python tool cache
+        run: |
+          mkdir -p "$HOME/hostedtoolcache"
+          echo "RUNNER_TOOL_CACHE=$HOME/hostedtoolcache" >> $GITHUB_ENV
+
       - name: Install arduino-cli
         run: |
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
@@ -26,7 +31,7 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-          cache: 'pip'               # cache pip for faster runs
+          cache: 'pip'
 
       - name: Install pyyaml
         run: |
@@ -36,7 +41,6 @@ jobs:
       - name: Configure arduino-cli and install core
         id: build
         env:
-          # Use a unique data directory per job to avoid conflicts
           ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
         run: |
           mkdir -p "$ARDUINO_DIRECTORIES_DATA"
@@ -52,15 +56,12 @@ jobs:
           profile_name = data.get('default_profile', 'release')
           profile = data['profiles'][profile_name]
 
-          # 1. Add platform index URL
           platform_info = profile['platforms'][0]
           url = platform_info['platform_index_url']
           subprocess.run(['arduino-cli', 'config', 'add', 'board_manager.additional_urls', url], check=True)
 
-          # 2. Update core index
           subprocess.run(['arduino-cli', 'core', 'update-index'], check=True)
 
-          # 3. Install core with version
           platform_str = platform_info['platform']
           if '(' in platform_str:
               core, version = platform_str.rsplit('(', 1)
@@ -71,7 +72,6 @@ jobs:
               core_spec = platform_str.strip()
           subprocess.run(['arduino-cli', 'core', 'install', core_spec], check=True)
 
-          # 4. Save FQBN for compile step
           fqbn = profile['fqbn']
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f"fqbn={fqbn}\n")
