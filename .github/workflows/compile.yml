@@ -1,4 +1,4 @@
-name: Compile Arduino Sketch (macOS arm64, no libraries)
+name: Compile Arduino Sketch (macOS arm64)
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 
 jobs:
   compile:
-    runs-on: self-hosted  # your macOS arm64 runner label
+    runs-on: self-hosted   # your macOS arm64 runner label
 
     steps:
       - name: Checkout repository
@@ -18,14 +18,29 @@ jobs:
       - name: Install arduino-cli
         run: |
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
-          sudo mv bin/arduino-cli /usr/local/bin/
+          mkdir -p "$HOME/.local/bin"
+          mv bin/arduino-cli "$HOME/.local/bin/"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install PyYAML
-        run: pip3 install --user pyyaml
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'               # cache pip for faster runs
 
-      - name: Parse sketch.yaml and install core
-        id: build
+      - name: Install pyyaml
         run: |
+          pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Configure arduino-cli and install core
+        id: build
+        env:
+          # Use a unique data directory per job to avoid conflicts
+          ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
+        run: |
+          mkdir -p "$ARDUINO_DIRECTORIES_DATA"
+
           python3 <<EOF
           import yaml
           import subprocess
@@ -63,5 +78,7 @@ jobs:
           EOF
 
       - name: Compile sketch
+        env:
+          ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
         run: |
           arduino-cli compile --fqbn "${{ steps.build.outputs.fqbn }}" .
