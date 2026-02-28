@@ -12,6 +12,7 @@ jobs:
     runs-on: self-hosted
     env:
       RUNNER_TOOL_CACHE: /Users/gh-runner/hostedtoolcache
+      ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
 
     steps:
       - name: Checkout repository
@@ -48,7 +49,7 @@ jobs:
           pip install --upgrade pip
           pip install pyyaml
 
-      # Extract the profile name from sketch.yaml (default_profile or fallback to 'release')
+      # Extract profile name (if needed)
       - name: Get profile name
         id: profile
         run: |
@@ -61,17 +62,42 @@ jobs:
               f.write(f"name={profile}\n")
           EOF
 
-      - name: Compile sketch (using profile)
-        env:
-          ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
+      # Add board URL and update index (explicitly, for clarity)
+      - name: Configure arduino-cli and update index
         run: |
-          echo "Compiling with profile: ${{ steps.profile.outputs.name }}"
-          arduino-cli compile -v --profile "${{ steps.profile.outputs.name }}" .
+          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          arduino-cli core update-index
 
-      - name: List installed cores (for debugging)
-        if: always()
+      # Install core (explicitly, though compile --profile does this automatically)
+      - name: Install RP2040 core
+        run: |
+          arduino-cli core install rp2040:rp2040
+
+      # List installed cores for verification
+      - name: List installed cores
         run: arduino-cli core list
 
-      - name: List boards matching FQBN (for debugging)
-        if: always()
-        run: arduino-cli board listall | grep -i "rp2040" || true
+      # List available boards matching "waveshare" to verify FQBN
+      - name: List Waveshare boards
+        run: arduino-cli board listall | grep -i waveshare
+
+      # Show details of the specific board (to see valid options)
+      - name: Show board details
+        run: arduino-cli board details rp2040:rp2040:waveshare_rp2040_plus || echo "Board not found"
+
+      # Attempt compilation with verbose output and full log capture
+      - name: Compile sketch with verbose logging
+        run: |
+          echo "Compiling with profile: ${{ steps.profile.outputs.name }}"
+          arduino-cli compile -v --profile "${{ steps.profile.outputs.name }}" . 2>&1 | tee compile.log
+          # Check exit code manually because tee masks it
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "Compilation failed. Full log:"
+            cat compile.log
+            exit 1
+          fi
+
+      # If you want to test a simplified FQBN without options, uncomment and use this:
+      # - name: Test with minimal FQBN
+      #   run: |
+      #     arduino-cli compile -v --fqbn rp2040:rp2040:waveshare_rp2040_plus .
