@@ -48,47 +48,30 @@ jobs:
           pip install --upgrade pip
           pip install pyyaml
 
-      - name: Configure arduino-cli and install core
-        id: build
-        env:
-          ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
+      # Extract the profile name from sketch.yaml (default_profile or fallback to 'release')
+      - name: Get profile name
+        id: profile
         run: |
-          mkdir -p "$ARDUINO_DIRECTORIES_DATA"
-
           python3 <<EOF
           import yaml
-          import subprocess
-          import os
-
           with open('sketch.yaml') as f:
               data = yaml.safe_load(f)
-
-          profile_name = data.get('default_profile', 'release')
-          profile = data['profiles'][profile_name]
-
-          platform_info = profile['platforms'][0]
-          url = platform_info['platform_index_url']
-          subprocess.run(['arduino-cli', 'config', 'add', 'board_manager.additional_urls', url], check=True)
-
-          subprocess.run(['arduino-cli', 'core', 'update-index'], check=True)
-
-          platform_str = platform_info['platform']
-          if '(' in platform_str:
-              core, version = platform_str.rsplit('(', 1)
-              core = core.strip()
-              version = version.strip(')')
-              core_spec = f"{core}@{version}"
-          else:
-              core_spec = platform_str.strip()
-          subprocess.run(['arduino-cli', 'core', 'install', core_spec], check=True)
-
-          fqbn = profile['fqbn']
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"fqbn={fqbn}\n")
+          profile = data.get('default_profile', 'release')
+          with open('$GITHUB_OUTPUT', 'a') as f:
+              f.write(f"name={profile}\n")
           EOF
 
-      - name: Compile sketch
+      - name: Compile sketch (using profile)
         env:
           ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
         run: |
-          arduino-cli compile --fqbn "${{ steps.build.outputs.fqbn }}" .
+          echo "Compiling with profile: ${{ steps.profile.outputs.name }}"
+          arduino-cli compile --profile "${{ steps.profile.outputs.name }}" .
+
+      - name: List installed cores (for debugging)
+        if: always()
+        run: arduino-cli core list
+
+      - name: List boards matching FQBN (for debugging)
+        if: always()
+        run: arduino-cli board listall | grep -i "rp2040" || true
