@@ -67,7 +67,7 @@ jobs:
           with open('sketch.yaml') as f:
               data = yaml.safe_load(f)
           profile = data.get('default_profile', 'release')
-          with open(''$GITHUB_OUTPUT'', ''a'') as f:
+          with open('$GITHUB_OUTPUT', 'a') as f:
               f.write(f"name={profile}\n")
           EOF
 
