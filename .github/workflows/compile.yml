@@ -18,19 +18,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ------- arduino-cli installation (skip if present) -------
+      # ----- arduino-cli installation (skip if present) -----
       - name: Check if arduino-cli is already installed
         id: check-arduino-cli
         run: |
           if command -v arduino-cli &> /dev/null; then
-            echo "arduino-cli found in PATH"
             echo "installed=true" >> $GITHUB_OUTPUT
           elif [ -f "$HOME/.local/bin/arduino-cli" ]; then
-            echo "arduino-cli found at ~/.local/bin/arduino-cli"
             echo "$HOME/.local/bin" >> $GITHUB_PATH
             echo "installed=true" >> $GITHUB_OUTPUT
           else
-            echo "arduino-cli not found"
             echo "installed=false" >> $GITHUB_OUTPUT
           fi
 
@@ -42,10 +39,20 @@ jobs:
           mv bin/arduino-cli "$HOME/.local/bin/"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install Python 3.11 with Homebrew
+      - name: Check if Python 3.11 is already installed
+        id: check-python
         run: |
-          brew update
-          brew install python@3.11
+          if command -v python3.11 &> /dev/null; then
+            echo "installed=true" >> $GITHUB_OUTPUT
+          else
+            echo "installed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install Python 3.11 with Homebrew
+        if: steps.check-python.outputs.installed == 'false'
+        run: |
+          brew update -q
+          brew install -q python@3.11
           echo "/opt/homebrew/bin" >> $GITHUB_PATH
 
       - name: Create virtual environment
@@ -58,8 +65,10 @@ jobs:
 
       - name: Install pyyaml
         run: |
-          pip install --upgrade pip
-          pip install pyyaml
+          pip install -q --upgrade pip
+          if ! pip show pyyaml > /dev/null 2>&1; then
+            pip install pyyaml
+          fi
 
       - name: Set temporary directory for build tools
         run: |
@@ -83,9 +92,11 @@ jobs:
 
           platform_info = profile['platforms'][0]
           url = platform_info['platform_index_url']
-          subprocess.run(['arduino-cli', 'config', 'add', 'board_manager.additional_urls', url], check=True)
+          subprocess.run(['arduino-cli', 'config', 'add', 'board_manager.additional_urls', url],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
 
-          subprocess.run(['arduino-cli', 'core', 'update-index'], check=True)
+          subprocess.run(['arduino-cli', 'core', 'update-index'],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
 
           platform_str = platform_info['platform']
           if '(' in platform_str:
@@ -97,7 +108,8 @@ jobs:
               core_spec = platform_str.strip()
 
           # Check if core already installed
-          installed_cores = subprocess.run(['arduino-cli', 'core', 'list'], capture_output=True, text=True).stdout
+          installed_cores = subprocess.run(['arduino-cli', 'core', 'list'],
+                                           capture_output=True, text=True).stdout
           installed = set()
           for line in installed_cores.splitlines():
               parts = line.split()
@@ -113,9 +125,11 @@ jobs:
               required_ver = None
 
           if required_ver and (core_id, required_ver) in installed:
-              print(f"Core {core_spec} already installed, skipping installation.")
+              # Core already present – skip installation silently
+              pass
           else:
-              subprocess.run(['arduino-cli', 'core', 'install', core_spec], check=True)
+              subprocess.run(['arduino-cli', 'core', 'install', core_spec],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True)
 
           fqbn = profile['fqbn']
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
@@ -127,39 +141,27 @@ jobs:
         run: |
           INO_FILE=$(find . -name "*.ino" -print -quit)
           if [ -z "$INO_FILE" ]; then
-            echo "No .ino file found in the repository"
+            echo "No .ino file found in the repository" >&2
             exit 1
           fi
           SKETCH_DIR=$(dirname "$INO_FILE")
           echo "sketch-dir=$SKETCH_DIR" >> $GITHUB_OUTPUT
-          echo "Found sketch in $SKETCH_DIR"
 
-      # Compile and explicitly set output directory
       - name: Compile sketch
         id: compile
         run: |
-          # Create a known output directory
           mkdir -p firmware_output
           arduino-cli compile --fqbn "${{ steps.build.outputs.fqbn }}" \
             --output-dir firmware_output \
             "${{ steps.find-sketch.outputs.sketch-dir }}"
-          # List generated files (for debugging)
-          ls -la firmware_output/
 
-      # Rename the generated UF2 file to Firmware.uf2
       - name: Rename UF2 firmware
         run: |
-          # Find the first .uf2 file in firmware_output and rename it
           UF2_FILE=$(find firmware_output -maxdepth 1 -name "*.uf2" -print -quit)
           if [ -n "$UF2_FILE" ]; then
             mv "$UF2_FILE" firmware_output/Firmware.uf2
-            echo "Renamed $UF2_FILE to Firmware.uf2"
-          else
-            echo "No .uf2 file found, skipping rename."
           fi
-          ls -la firmware_output/
 
-      # Upload only the Firmware.uf2 file as an artifact
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
