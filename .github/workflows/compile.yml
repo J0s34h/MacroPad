@@ -146,9 +146,22 @@ jobs:
           # List generated files (for debugging)
           ls -la firmware_output/
 
-      # Upload the firmware files as an artifact
+      # Rename the generated UF2 file to Firmware.uf2
+      - name: Rename UF2 firmware
+        run: |
+          # Find the first .uf2 file in firmware_output and rename it
+          UF2_FILE=$(find firmware_output -maxdepth 1 -name "*.uf2" -print -quit)
+          if [ -n "$UF2_FILE" ]; then
+            mv "$UF2_FILE" firmware_output/Firmware.uf2
+            echo "Renamed $UF2_FILE to Firmware.uf2"
+          else
+            echo "No .uf2 file found, skipping rename."
+          fi
+          ls -la firmware_output/
+
+      # Upload only the Firmware.uf2 file as an artifact
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: firmware
-          path: firmware_output/
+          path: firmware_output/Firmware.uf2
