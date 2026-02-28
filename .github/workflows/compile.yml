@@ -12,7 +12,6 @@ jobs:
     runs-on: self-hosted
     env:
       RUNNER_TOOL_CACHE: /Users/gh-runner/hostedtoolcache
-      # Use a persistent path inside the runner's workspace that will be cached
       ARDUINO_DATA_DIR: ${{ github.workspace }}/arduino-data
 
     steps:
@@ -25,10 +24,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.ARDUINO_DATA_DIR }}
-          # Invalidate cache when sketch.yaml changes (or when you manually bump the version)
           key: arduino-${{ hashFiles('sketch.yaml') }}-${{ runner.os }}
           restore-keys: |
             arduino-${{ runner.os }}-
+          save-always: true   # Save cache even if a later step fails (so partial downloads aren't lost)
 
       - name: Create Python tool cache directory
         run: mkdir -p "$RUNNER_TOOL_CACHE"
@@ -59,33 +58,54 @@ jobs:
           pip install --upgrade pip
           pip install pyyaml
 
-      - name: Get profile name
+      # ---------- Extract profile info ----------
+      - name: Get profile name and libraries
         id: profile
         run: |
           python3 <<EOF
           import yaml
+          import json
+          import os
+
           with open('sketch.yaml') as f:
               data = yaml.safe_load(f)
-          profile = data.get('default_profile', 'release')
-          with open('$GITHUB_OUTPUT', 'a') as f:
-              f.write(f"name={profile}\n")
+
+          profile_name = data.get('default_profile', 'release')
+          profile = data['profiles'][profile_name]
+
+          # Save profile name
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"name={profile_name}\n")
+
+          # Extract libraries list (as JSON array for later steps)
+          libs = profile.get('libraries', [])
+          lib_list = []
+          for lib in libs:
+              # Format: "LibraryName (version)" or just "LibraryName"
+              if '(' in lib and ')' in lib:
+                  name = lib[:lib.rfind('(')].strip()
+                  version = lib[lib.rfind('(')+1:lib.rfind(')')].strip()
+                  lib_list.append(f"{name}@{version}")
+              else:
+                  lib_list.append(lib)  # no version specified
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"libraries={json.dumps(lib_list)}\n")
           EOF
 
-      # ---------- Configure arduino-cli (always run) ----------
-      - name: Configure arduino-cli
+      # ---------- Configure arduino-cli ----------
+      - name: Configure arduino-cli and update index
         env:
           ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: |
           arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
-          # Update index only if cache missed? Updating is cheap; keep it for safety.
           arduino-cli core update-index
 
-      # ---------- Install core if not already present ----------
-      - name: Install RP2040 core (with retries)
+      # ---------- Install core (with retries) ----------
+      - name: Install RP2040 core
         env:
           ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: |
-          # Check if core is already installed; if not, install with retries
           if ! arduino-cli core list | grep -q "rp2040:rp2040"; then
             echo "Core not found. Installing..."
             for i in {1..3}; do
@@ -95,17 +115,46 @@ jobs:
             echo "Core already installed."
           fi
 
-      - name: List installed cores (debug)
+      # ---------- Install libraries explicitly (with retries) ----------
+      - name: Install required libraries
+        env:
+          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
+        run: |
+          # Parse the JSON array from the profile output
+          LIBRARIES='${{ steps.profile.outputs.libraries }}'
+          echo "Libraries to install: $LIBRARIES"
+          if [ "$LIBRARIES" = "[]" ] || [ -z "$LIBRARIES" ]; then
+            echo "No libraries defined in profile."
+            exit 0
+          fi
+
+          # Use jq if available, otherwise Python fallback
+          if command -v jq &> /dev/null; then
+            libs=$(echo "$LIBRARIES" | jq -r '.[]')
+          else
+            # fallback to python one-liner
+            libs=$(python3 -c "import json, sys; libs=json.loads(sys.argv[1]); print('\n'.join(libs))" "$LIBRARIES")
+          fi
+
+          for lib in $libs; do
+            echo "Installing library: $lib"
+            for i in {1..3}; do
+              arduino-cli lib install "$lib" && break || sleep 5
+            done
+          done
+
+      # ---------- Debug steps ----------
+      - name: List installed cores
         env:
           ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: arduino-cli core list
 
-      - name: List Waveshare boards (debug)
+      - name: List Waveshare boards
         env:
           ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: arduino-cli board listall | grep -i waveshare
 
-      - name: Show board details (debug)
+      - name: Show board details
         env:
           ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: arduino-cli board details rp2040:rp2040:waveshare_rp2040_plus || echo "Board not found"
