@@ -11,7 +11,6 @@ jobs:
   compile:
     runs-on: self-hosted
     env:
-      # Use a persistent location for Arduino data (under the user's home)
       ARDUINO_DIRECTORIES_DATA: /Users/gh-runner/arduino-data
       RUNNER_TOOL_CACHE: /Users/gh-runner/hostedtoolcache
 
@@ -42,7 +41,6 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           mv bin/arduino-cli "$HOME/.local/bin/"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
-      # -----------------------------------------------------------
 
       - name: Install Python 3.11 with Homebrew
         run: |
@@ -72,7 +70,6 @@ jobs:
         id: build
         run: |
           mkdir -p "$ARDUINO_DIRECTORIES_DATA"
-
           python3 <<EOF
           import yaml
           import subprocess
@@ -99,7 +96,7 @@ jobs:
           else:
               core_spec = platform_str.strip()
 
-          # Check if the required core is already installed
+          # Check if core already installed
           installed_cores = subprocess.run(['arduino-cli', 'core', 'list'], capture_output=True, text=True).stdout
           installed = set()
           for line in installed_cores.splitlines():
@@ -109,14 +106,12 @@ jobs:
                   ver = parts[1]
                   installed.add((core_id, ver))
 
-          # Extract core ID and version from core_spec
           if '@' in core_spec:
               core_id, required_ver = core_spec.split('@', 1)
           else:
               core_id = core_spec
               required_ver = None
 
-          # If the exact version is installed, skip installation
           if required_ver and (core_id, required_ver) in installed:
               print(f"Core {core_spec} already installed, skipping installation.")
           else:
@@ -139,6 +134,21 @@ jobs:
           echo "sketch-dir=$SKETCH_DIR" >> $GITHUB_OUTPUT
           echo "Found sketch in $SKETCH_DIR"
 
+      # Compile and explicitly set output directory
       - name: Compile sketch
+        id: compile
         run: |
-          arduino-cli compile --fqbn "${{ steps.build.outputs.fqbn }}" "${{ steps.find-sketch.outputs.sketch-dir }}"
+          # Create a known output directory
+          mkdir -p firmware_output
+          arduino-cli compile --fqbn "${{ steps.build.outputs.fqbn }}" \
+            --output-dir firmware_output \
+            "${{ steps.find-sketch.outputs.sketch-dir }}"
+          # List generated files (for debugging)
+          ls -la firmware_output/
+
+      # Upload the firmware files as an artifact
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: firmware_output/
