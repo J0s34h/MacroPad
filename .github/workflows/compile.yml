@@ -62,36 +62,33 @@ jobs:
       - name: Get profile name and libraries
         id: profile
         run: |
-          python3 <<EOF
+          python3 -c '
           import yaml
           import json
           import os
 
-          with open('sketch.yaml') as f:
+          with open("sketch.yaml") as f:
               data = yaml.safe_load(f)
 
-          profile_name = data.get('default_profile', 'release')
-          profile = data['profiles'][profile_name]
+          profile_name = data.get("default_profile", "release")
+          profile = data["profiles"][profile_name]
 
-          # Save profile name
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"name={profile_name}\n")
 
-          # Extract libraries list (as JSON array for later steps)
-          libs = profile.get('libraries', [])
+          libs = profile.get("libraries", [])
           lib_list = []
           for lib in libs:
-              # Format: "LibraryName (version)" or just "LibraryName"
-              if '(' in lib and ')' in lib:
-                  name = lib[:lib.rfind('(')].strip()
-                  version = lib[lib.rfind('(')+1:lib.rfind(')')].strip()
+              if "(" in lib and ")" in lib:
+                  name = lib[:lib.rfind("(")].strip()
+                  version = lib[lib.rfind("(")+1:lib.rfind(")")].strip()
                   lib_list.append(f"{name}@{version}")
               else:
-                  lib_list.append(lib)  # no version specified
+                  lib_list.append(lib)
 
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"libraries={json.dumps(lib_list)}\n")
-          EOF
+          '
 
       # ---------- Configure arduino-cli ----------
       - name: Configure arduino-cli and update index
@@ -115,33 +112,55 @@ jobs:
             echo "Core already installed."
           fi
 
-      # ---------- Install libraries explicitly (with retries) ----------
       - name: Install required libraries
         env:
           ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: |
-          # Parse the JSON array from the profile output
-          LIBRARIES='${{ steps.profile.outputs.libraries }}'
-          echo "Libraries to install: $LIBRARIES"
-          if [ "$LIBRARIES" = "[]" ] || [ -z "$LIBRARIES" ]; then
-            echo "No libraries defined in profile."
-            exit 0
-          fi
+          python3 -c '
+          import yaml
+          import subprocess
+          import time
+          import sys
 
-          # Use jq if available, otherwise Python fallback
-          if command -v jq &> /dev/null; then
-            libs=$(echo "$LIBRARIES" | jq -r '.[]')
-          else
-            # fallback to python one-liner
-            libs=$(python3 -c "import json, sys; libs=json.loads(sys.argv[1]); print('\n'.join(libs))" "$LIBRARIES")
-          fi
+          with open("sketch.yaml") as f:
+              data = yaml.safe_load(f)
 
-          for lib in $libs; do
-            echo "Installing library: $lib"
-            for i in {1..3}; do
-              arduino-cli lib install "$lib" && break || sleep 5
-            done
-          done
+          profile_name = data.get("default_profile", "release")
+          profile = data["profiles"][profile_name]
+          libraries = profile.get("libraries", [])
+
+          def install_lib(lib_spec):
+              if "(" in lib_spec and ")" in lib_spec:
+                  name = lib_spec[:lib_spec.rfind("(")].strip()
+                  version = lib_spec[lib_spec.rfind("(")+1:lib_spec.rfind(")")].strip()
+                  lib_arg = f"{name}@{version}"
+              else:
+                  lib_arg = lib_spec
+
+              for attempt in range(1, 4):
+                  print(f"Installing library: {lib_arg} (attempt {attempt})")
+                  result = subprocess.run(
+                      ["arduino-cli", "lib", "install", lib_arg],
+                      capture_output=True, text=True
+                  )
+                  if result.returncode == 0:
+                      print(f"Successfully installed {lib_arg}")
+                      return True
+                  else:
+                      print(f"Attempt {attempt} failed: {result.stderr}")
+                      time.sleep(5)
+              return False
+
+          success = True
+          for lib in libraries:
+              if not install_lib(lib):
+                  print(f"❌ Failed to install {lib} after 3 attempts")
+                  success = False
+
+          if not success:
+              sys.exit(1)
+          print("✅ All libraries installed successfully")
+          '
 
       # ---------- Debug steps ----------
       - name: List installed cores
