@@ -11,33 +11,38 @@ jobs:
   compile:
     runs-on: self-hosted
     env:
+      # Use a persistent location for Arduino data (under the user's home)
+      ARDUINO_DIRECTORIES_DATA: /Users/gh-runner/arduino-data
       RUNNER_TOOL_CACHE: /Users/gh-runner/hostedtoolcache
-      ARDUINO_DATA_DIR: ${{ github.workspace }}/arduino-data
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------- Cache Arduino data ----------
-      - name: Cache Arduino core and libraries
-        id: cache-arduino
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.ARDUINO_DATA_DIR }}
-          key: arduino-${{ hashFiles('sketch.yaml') }}-${{ runner.os }}
-          restore-keys: |
-            arduino-${{ runner.os }}-
-          save-always: true   # Save cache even if a later step fails (so partial downloads aren't lost)
-
-      - name: Create Python tool cache directory
-        run: mkdir -p "$RUNNER_TOOL_CACHE"
+      # ------- arduino-cli installation (skip if present) -------
+      - name: Check if arduino-cli is already installed
+        id: check-arduino-cli
+        run: |
+          if command -v arduino-cli &> /dev/null; then
+            echo "arduino-cli found in PATH"
+            echo "installed=true" >> $GITHUB_OUTPUT
+          elif [ -f "$HOME/.local/bin/arduino-cli" ]; then
+            echo "arduino-cli found at ~/.local/bin/arduino-cli"
+            echo "$HOME/.local/bin" >> $GITHUB_PATH
+            echo "installed=true" >> $GITHUB_OUTPUT
+          else
+            echo "arduino-cli not found"
+            echo "installed=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Install arduino-cli
+        if: steps.check-arduino-cli.outputs.installed == 'false'
         run: |
           curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh | sh
           mkdir -p "$HOME/.local/bin"
           mv bin/arduino-cli "$HOME/.local/bin/"
           echo "$HOME/.local/bin" >> $GITHUB_PATH
+      # -----------------------------------------------------------
 
       - name: Install Python 3.11 with Homebrew
         run: |
@@ -58,135 +63,94 @@ jobs:
           pip install --upgrade pip
           pip install pyyaml
 
-      # ---------- Extract profile info ----------
-      - name: Get profile name and libraries
-        id: profile
+      # ------- Cache the Arduino data directory (cores + libraries) -------
+      - name: Cache Arduino data
+        id: cache-arduino
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ARDUINO_DIRECTORIES_DATA }}
+          key: arduino-data-${{ hashFiles('sketch.yaml') }}-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: |
+            arduino-data-${{ hashFiles('sketch.yaml') }}-
+            arduino-data-
+      # --------------------------------------------------------------------
+
+      - name: Set temporary directory for build tools
         run: |
-          python3 -c '
-          import yaml
-          import json
-          import os
+          echo "TMPDIR=${{ runner.temp }}" >> $GITHUB_ENV
+          mkdir -p "${{ runner.temp }}"
 
-          with open("sketch.yaml") as f:
-              data = yaml.safe_load(f)
-
-          profile_name = data.get("default_profile", "release")
-          profile = data["profiles"][profile_name]
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"name={profile_name}\n")
-
-          libs = profile.get("libraries", [])
-          lib_list = []
-          for lib in libs:
-              if "(" in lib and ")" in lib:
-                  name = lib[:lib.rfind("(")].strip()
-                  version = lib[lib.rfind("(")+1:lib.rfind(")")].strip()
-                  lib_list.append(f"{name}@{version}")
-              else:
-                  lib_list.append(lib)
-
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"libraries={json.dumps(lib_list)}\n")
-          '
-
-      # ---------- Configure arduino-cli ----------
-      - name: Configure arduino-cli and update index
-        env:
-          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
+      - name: Configure arduino-cli and install core (if not cached)
+        id: build
+        # Only run the full configuration if the cache was NOT hit
+        if: steps.cache-arduino.outputs.cache-hit != 'true'
         run: |
-          arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
-          arduino-cli core update-index
+          mkdir -p "$ARDUINO_DIRECTORIES_DATA"
 
-      # ---------- Install core (with retries) ----------
-      - name: Install RP2040 core
-        env:
-          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
-        run: |
-          if ! arduino-cli core list | grep -q "rp2040:rp2040"; then
-            echo "Core not found. Installing..."
-            for i in {1..3}; do
-              arduino-cli core install rp2040:rp2040 && break || sleep 5
-            done
-          else
-            echo "Core already installed."
-          fi
-
-      - name: Install required libraries
-        env:
-          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
-        run: |
-          python3 -c '
+          python3 <<EOF
           import yaml
           import subprocess
-          import time
-          import sys
+          import os
 
-          with open("sketch.yaml") as f:
+          with open('sketch.yaml') as f:
               data = yaml.safe_load(f)
 
-          profile_name = data.get("default_profile", "release")
-          profile = data["profiles"][profile_name]
-          libraries = profile.get("libraries", [])
+          profile_name = data.get('default_profile', 'release')
+          profile = data['profiles'][profile_name]
 
-          def install_lib(lib_spec):
-              if "(" in lib_spec and ")" in lib_spec:
-                  name = lib_spec[:lib_spec.rfind("(")].strip()
-                  version = lib_spec[lib_spec.rfind("(")+1:lib_spec.rfind(")")].strip()
-                  lib_arg = f"{name}@{version}"
-              else:
-                  lib_arg = lib_spec
+          platform_info = profile['platforms'][0]
+          url = platform_info['platform_index_url']
+          subprocess.run(['arduino-cli', 'config', 'add', 'board_manager.additional_urls', url], check=True)
 
-              for attempt in range(1, 4):
-                  print(f"Installing library: {lib_arg} (attempt {attempt})")
-                  result = subprocess.run(
-                      ["arduino-cli", "lib", "install", lib_arg],
-                      capture_output=True, text=True
-                  )
-                  if result.returncode == 0:
-                      print(f"Successfully installed {lib_arg}")
-                      return True
-                  else:
-                      print(f"Attempt {attempt} failed: {result.stderr}")
-                      time.sleep(5)
-              return False
+          subprocess.run(['arduino-cli', 'core', 'update-index'], check=True)
 
-          success = True
-          for lib in libraries:
-              if not install_lib(lib):
-                  print(f"❌ Failed to install {lib} after 3 attempts")
-                  success = False
+          platform_str = platform_info['platform']
+          if '(' in platform_str:
+              core, version = platform_str.rsplit('(', 1)
+              core = core.strip()
+              version = version.strip(')')
+              core_spec = f"{core}@{version}"
+          else:
+              core_spec = platform_str.strip()
+          subprocess.run(['arduino-cli', 'core', 'install', core_spec], check=True)
 
-          if not success:
-              sys.exit(1)
-          print("✅ All libraries installed successfully")
-          '
+          fqbn = profile['fqbn']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"fqbn={fqbn}\n")
+          EOF
 
-      # ---------- Debug steps ----------
-      - name: List installed cores
-        env:
-          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
-        run: arduino-cli core list
-
-      - name: List Waveshare boards
-        env:
-          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
-        run: arduino-cli board listall | grep -i waveshare
-
-      - name: Show board details
-        env:
-          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
-        run: arduino-cli board details rp2040:rp2040:waveshare_rp2040_plus || echo "Board not found"
-
-      # ---------- Compile ----------
-      - name: Compile sketch with verbose logging
-        env:
-          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
+      # If cache was hit, we still need to extract the FQBN from sketch.yaml
+      - name: Extract FQBN from sketch.yaml (cache hit)
+        if: steps.cache-arduino.outputs.cache-hit == 'true'
+        id: build-from-cache
         run: |
-          echo "Compiling with profile: ${{ steps.profile.outputs.name }}"
-          arduino-cli compile -v --profile "${{ steps.profile.outputs.name }}" . 2>&1 | tee compile.log
-          if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "Compilation failed. Full log:"
-            cat compile.log
+          python3 <<EOF
+          import yaml
+          import os
+
+          with open('sketch.yaml') as f:
+              data = yaml.safe_load(f)
+
+          profile_name = data.get('default_profile', 'release')
+          profile = data['profiles'][profile_name]
+          fqbn = profile['fqbn']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"fqbn={fqbn}\n")
+          EOF
+
+      - name: Find sketch
+        id: find-sketch
+        run: |
+          INO_FILE=$(find . -name "*.ino" -print -quit)
+          if [ -z "$INO_FILE" ]; then
+            echo "No .ino file found in the repository"
             exit 1
           fi
+          SKETCH_DIR=$(dirname "$INO_FILE")
+          echo "sketch-dir=$SKETCH_DIR" >> $GITHUB_OUTPUT
+          echo "Found sketch in $SKETCH_DIR"
+
+      - name: Compile sketch
+        # Use the appropriate FQBN output (either from build or build-from-cache)
+        run: |
+          arduino-cli compile --fqbn "${{ steps.build.outputs.fqbn || steps.build-from-cache.outputs.fqbn }}" "${{ steps.find-sketch.outputs.sketch-dir }}"
