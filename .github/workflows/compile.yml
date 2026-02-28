@@ -12,10 +12,23 @@ jobs:
     runs-on: self-hosted
     env:
       RUNNER_TOOL_CACHE: /Users/gh-runner/hostedtoolcache
+      # Use a persistent path inside the runner's workspace that will be cached
+      ARDUINO_DATA_DIR: ${{ github.workspace }}/arduino-data
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # ---------- Cache Arduino data ----------
+      - name: Cache Arduino core and libraries
+        id: cache-arduino
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.ARDUINO_DATA_DIR }}
+          # Invalidate cache when sketch.yaml changes (or when you manually bump the version)
+          key: arduino-${{ hashFiles('sketch.yaml') }}-${{ runner.os }}
+          restore-keys: |
+            arduino-${{ runner.os }}-
 
       - name: Create Python tool cache directory
         run: mkdir -p "$RUNNER_TOOL_CACHE"
@@ -54,42 +67,53 @@ jobs:
           with open('sketch.yaml') as f:
               data = yaml.safe_load(f)
           profile = data.get('default_profile', 'release')
-          with open('$GITHUB_OUTPUT', 'a') as f:
+          with open(''$GITHUB_OUTPUT'', ''a'') as f:
               f.write(f"name={profile}\n")
           EOF
 
-      # ---- Arduino CLI configuration ----
-      - name: Configure arduino-cli and update index
+      # ---------- Configure arduino-cli (always run) ----------
+      - name: Configure arduino-cli
         env:
-          ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
+          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: |
           arduino-cli config add board_manager.additional_urls https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+          # Update index only if cache missed? Updating is cheap; keep it for safety.
           arduino-cli core update-index
 
-      - name: Install RP2040 core
+      # ---------- Install core if not already present ----------
+      - name: Install RP2040 core (with retries)
         env:
-          ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
+          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: |
-          arduino-cli core install rp2040:rp2040  
+          # Check if core is already installed; if not, install with retries
+          if ! arduino-cli core list | grep -q "rp2040:rp2040"; then
+            echo "Core not found. Installing..."
+            for i in {1..3}; do
+              arduino-cli core install rp2040:rp2040 && break || sleep 5
+            done
+          else
+            echo "Core already installed."
+          fi
 
-      - name: List installed cores
+      - name: List installed cores (debug)
         env:
-          ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
+          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: arduino-cli core list
 
-      - name: List Waveshare boards
+      - name: List Waveshare boards (debug)
         env:
-          ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
+          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: arduino-cli board listall | grep -i waveshare
 
-      - name: Show board details
+      - name: Show board details (debug)
         env:
-          ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
+          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: arduino-cli board details rp2040:rp2040:waveshare_rp2040_plus || echo "Board not found"
 
+      # ---------- Compile ----------
       - name: Compile sketch with verbose logging
         env:
-          ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
+          ARDUINO_DIRECTORIES_DATA: ${{ env.ARDUINO_DATA_DIR }}
         run: |
           echo "Compiling with profile: ${{ steps.profile.outputs.name }}"
           arduino-cli compile -v --profile "${{ steps.profile.outputs.name }}" . 2>&1 | tee compile.log
