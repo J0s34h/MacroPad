@@ -66,7 +66,7 @@ jobs:
           ARDUINO_DIRECTORIES_DATA: ${{ runner.temp }}/arduino-data
         run: |
           echo "Compiling with profile: ${{ steps.profile.outputs.name }}"
-          arduino-cli compile --profile "${{ steps.profile.outputs.name }}" .
+          arduino-cli compile -v --profile "${{ steps.profile.outputs.name }}" .
 
       - name: List installed cores (for debugging)
         if: always()
