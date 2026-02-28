@@ -63,27 +63,13 @@ jobs:
           pip install --upgrade pip
           pip install pyyaml
 
-      # ------- Cache the Arduino data directory (cores + libraries) -------
-      - name: Cache Arduino data
-        id: cache-arduino
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.ARDUINO_DIRECTORIES_DATA }}
-          key: arduino-data-${{ hashFiles('sketch.yaml') }}-${{ runner.os }}-${{ runner.arch }}
-          restore-keys: |
-            arduino-data-${{ hashFiles('sketch.yaml') }}-
-            arduino-data-
-      # --------------------------------------------------------------------
-
       - name: Set temporary directory for build tools
         run: |
           echo "TMPDIR=${{ runner.temp }}" >> $GITHUB_ENV
           mkdir -p "${{ runner.temp }}"
 
-      - name: Configure arduino-cli and install core (if not cached)
+      - name: Configure arduino-cli and install core (if needed)
         id: build
-        # Only run the full configuration if the cache was NOT hit
-        if: steps.cache-arduino.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$ARDUINO_DIRECTORIES_DATA"
 
@@ -112,27 +98,30 @@ jobs:
               core_spec = f"{core}@{version}"
           else:
               core_spec = platform_str.strip()
-          subprocess.run(['arduino-cli', 'core', 'install', core_spec], check=True)
 
-          fqbn = profile['fqbn']
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"fqbn={fqbn}\n")
-          EOF
+          # Check if the required core is already installed
+          installed_cores = subprocess.run(['arduino-cli', 'core', 'list'], capture_output=True, text=True).stdout
+          installed = set()
+          for line in installed_cores.splitlines():
+              parts = line.split()
+              if len(parts) >= 2:
+                  core_id = parts[0]
+                  ver = parts[1]
+                  installed.add((core_id, ver))
 
-      # If cache was hit, we still need to extract the FQBN from sketch.yaml
-      - name: Extract FQBN from sketch.yaml (cache hit)
-        if: steps.cache-arduino.outputs.cache-hit == 'true'
-        id: build-from-cache
-        run: |
-          python3 <<EOF
-          import yaml
-          import os
+          # Extract core ID and version from core_spec
+          if '@' in core_spec:
+              core_id, required_ver = core_spec.split('@', 1)
+          else:
+              core_id = core_spec
+              required_ver = None
 
-          with open('sketch.yaml') as f:
-              data = yaml.safe_load(f)
+          # If the exact version is installed, skip installation
+          if required_ver and (core_id, required_ver) in installed:
+              print(f"Core {core_spec} already installed, skipping installation.")
+          else:
+              subprocess.run(['arduino-cli', 'core', 'install', core_spec], check=True)
 
-          profile_name = data.get('default_profile', 'release')
-          profile = data['profiles'][profile_name]
           fqbn = profile['fqbn']
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f"fqbn={fqbn}\n")
@@ -151,6 +140,5 @@ jobs:
           echo "Found sketch in $SKETCH_DIR"
 
       - name: Compile sketch
-        # Use the appropriate FQBN output (either from build or build-from-cache)
         run: |
-          arduino-cli compile --fqbn "${{ steps.build.outputs.fqbn || steps.build-from-cache.outputs.fqbn }}" "${{ steps.find-sketch.outputs.sketch-dir }}"
+          arduino-cli compile --fqbn "${{ steps.build.outputs.fqbn }}" "${{ steps.find-sketch.outputs.sketch-dir }}"
